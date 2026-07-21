@@ -24,6 +24,13 @@ type SkillReadRow = SkillSearchRow & {
   skillText: string
 }
 
+export type RemoteSkillDescriptor = {
+  name: string
+  description: string | null
+  capability: string
+  location: string
+}
+
 export function buildSkillCapabilityName(skillId: string): string {
   return `${SKILL_CAPABILITY_PREFIX}${skillId}`
 }
@@ -117,6 +124,21 @@ async function listAccessibleSkills(input: {
     skill,
     hubAccessibleSkillIds,
   }))
+}
+
+export async function listAccessibleSkillDescriptors(input: {
+  organizationId: string
+  member: McpMemberIdentity | null
+}): Promise<RemoteSkillDescriptor[]> {
+  const skills = await listAccessibleSkills(input)
+  return skills
+    .map((skill) => ({
+      name: skill.title,
+      description: skill.description,
+      capability: buildSkillCapabilityName(skill.id),
+      location: `openwork-cloud://skills/${skill.id}/SKILL.md`,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.capability.localeCompare(b.capability))
 }
 
 async function getAccessibleSkill(input: {

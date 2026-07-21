@@ -125,6 +125,32 @@ test("agent MCP server exposes steering instructions during initialize", async (
   await server.close()
 })
 
+test("agent MCP server injects remote skill metadata without embedding the skill body", async () => {
+  const server = agentModule.createAgentMcpServer([{
+    name: "Customer <Briefing>",
+    description: "Use for accounts & renewals",
+    capability: "skill:skill_customer_briefing",
+    location: "openwork-cloud://skills/skill_customer_briefing/SKILL.md",
+  }])
+  const client = new Client({ name: "test-client", version: "1.0.0" })
+  const transports = createMemoryTransportPair()
+
+  await server.connect(transports.server)
+  await client.connect(transports.client)
+
+  const instructions = client.getInstructions() ?? ""
+  expect(instructions).toContain("<available_skills>")
+  expect(instructions).toContain("<name>Customer &lt;Briefing&gt;</name>")
+  expect(instructions).toContain("<description>Use for accounts &amp; renewals</description>")
+  expect(instructions).toContain("<location>openwork-cloud://skills/skill_customer_briefing/SKILL.md</location>")
+  expect(instructions).toContain("<capability>skill:skill_customer_briefing</capability>")
+  expect(instructions).toContain("call execute_capability")
+  expect(instructions).not.toContain("# Customer Briefing")
+
+  await client.close()
+  await server.close()
+})
+
 test("capability search results include structured output alongside text compatibility", () => {
   const matches = [{
     name: "getOrganizations",

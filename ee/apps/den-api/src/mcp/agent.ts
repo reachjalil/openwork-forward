@@ -17,7 +17,7 @@ import { preflightMcpJsonRpcRequest } from "./json-rpc-preflight.js"
 import { compareCapabilityMatches, SEARCH_CAPABILITIES_TOOL_NAME, searchCapabilities, searchCapabilitySourceFilter, type CapabilityMatch } from "./search.js"
 import { executeExternalCapability, externalMcpSearchCoverageHint, parseExternalCapabilityName, resolveMcpMemberIdentity, searchExternalCapabilities, type ExternalCapabilityExecuteResult } from "./external-capabilities.js"
 import { executeMarketplaceCapability, parseMarketplaceCapabilityName, searchMarketplaceCapabilities, type MarketplaceCapabilityObjectType } from "./marketplace-capabilities.js"
-import { executeSkillCapability, parseSkillCapabilityName, searchSkillCapabilities } from "./skill-capabilities.js"
+import { executeSkillCapability, listAccessibleSkillDescriptors, parseSkillCapabilityName, searchSkillCapabilities, type RemoteSkillDescriptor } from "./skill-capabilities.js"
 import { resolvePublicOrigin } from "../capability-sources/generic-oauth.js"
 import { env } from "../env.js"
 import { isPlatformAdminUserId } from "../middleware/admin.js"
@@ -121,6 +121,48 @@ export const AGENT_MCP_INSTRUCTIONS = [
   "When a match has kind connection_status, name connectionStatus.connectionName and relay connectionStatus.action exactly. Distinguish the member's Your Connections page, the organization Connections dashboard, and the provider's own admin console.",
   "Connection probes are live. After the requested human fixes that connector, search again in the same task; otherwise do not retry unchanged or improvise workarounds through other tools.",
 ].join("\n")
+
+function escapeXml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;")
+}
+
+function promptMetadata(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, 1_000)
+}
+
+async function isInitializeRequest(request: Request): Promise<boolean> {
+  if (request.method.toUpperCase() !== "POST") return false
+  const body: unknown = await request.clone().json().catch(() => null)
+  return typeof body === "object"
+    && body !== null
+    && "method" in body
+    && body.method === "initialize"
+}
+
+export function buildAgentMcpInstructions(skills: RemoteSkillDescriptor[] = []): string {
+  if (skills.length === 0) return AGENT_MCP_INSTRUCTIONS
+
+  return [
+    AGENT_MCP_INSTRUCTIONS,
+    "Skills provide specialized instructions and workflows for specific tasks.",
+    "The available remote skills below contain metadata only. When a task matches a skill description, call execute_capability with { name: <capability> } to retrieve its full SKILL.md body before following it. The <location> value is an opaque remote identifier, not a filesystem path.",
+    "<available_skills>",
+    ...skills.flatMap((skill) => [
+      "  <skill>",
+      `    <name>${escapeXml(promptMetadata(skill.name))}</name>`,
+      `    <description>${escapeXml(promptMetadata(skill.description ?? skill.name))}</description>`,
+      `    <location>${escapeXml(skill.location)}</location>`,
+      `    <capability>${escapeXml(skill.capability)}</capability>`,
+      "  </skill>",
+    ]),
+    "</available_skills>",
+  ].join("\n")
+}
 
 const EXECUTE_CAPABILITY_TIMEOUT_MESSAGE = `The capability call exceeded ${EXECUTE_CAPABILITY_TIMEOUT_MS / 1_000}s. Retry once; if it times out again, narrow the request (fewer results, tighter query) and tell the user the service is slow — do NOT tell them to reconfigure or reconnect.`
 
@@ -248,12 +290,12 @@ export async function executeCapabilityWithBudget<T extends ExecuteCapabilityToo
   }
 }
 
-export function createAgentMcpServer(): McpServer {
+export function createAgentMcpServer(skills: RemoteSkillDescriptor[] = []): McpServer {
   return new McpServer({
     name: "openwork-den-api-agent",
     version: "1.0.0",
   }, {
-    instructions: AGENT_MCP_INSTRUCTIONS,
+    instructions: buildAgentMcpInstructions(skills),
   })
 }
 
@@ -319,7 +361,14 @@ export function registerAgentMcpRoutes<T extends { Variables: Record<string, unk
     const externalMcpConnectionsEnabled = memberFacingMcpConnectionsEnabled(organizationRows[0]?.metadata, {
       gatingEnabled: env.mcpConnectionsGatingEnabled,
     })
-    const server = createAgentMcpServer()
+    let remoteSkills: RemoteSkillDescriptor[] = []
+    if (await isInitializeRequest(c.req.raw)) {
+      remoteSkills = await listAccessibleSkillDescriptors({
+        organizationId: principal.organizationId,
+        member: memberIdentity,
+      })
+    }
+    const server = createAgentMcpServer(remoteSkills)
 
     server.registerTool(
       SEARCH_CAPABILITIES_TOOL_NAME,
