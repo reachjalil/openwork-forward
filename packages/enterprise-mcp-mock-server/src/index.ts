@@ -69,3 +69,6 @@ export {
   type ProbePhaseResult,
   type ProbeResult,
 } from "./testing/probe.js"
+
+// OAuth/MCP conformance lab (scenario schema v2, pure engine, adapters).
+export * from "./lab/index.js"
